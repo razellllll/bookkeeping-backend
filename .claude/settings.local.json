@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git remote add:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nUpdate backend with Cloudinary integration for document management\n\nThis commit adds Cloudinary cloud storage integration to replace local file uploads:\n- Add Cloudinary configuration and setup documentation\n- Update server.js with Cloudinary upload/download endpoints\n- Add migration script for existing local files to Cloudinary\n- Include .env.example with required Cloudinary environment variables\n- Update package.json with cloudinary dependency\n\nGenerated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)",
+      "Bash(git fetch:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(git init:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: Backend for Viron Bookkeeping Services\n\nThis commit includes the complete backend application with:\n- Express server with API endpoints for clients, documents, and dependents\n- MySQL database configuration and connection handling\n- Cloudinary integration for document storage\n- Migration scripts for database setup and data migration\n- Authentication and CORS configuration\n- File upload/download functionality\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
