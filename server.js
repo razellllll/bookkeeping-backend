@@ -1428,82 +1428,84 @@ app.get('/api/debug/documents', (req, res) => {
 // Download document - Redirect to Cloudinary URL
 app.get('/api/download/:documentId', (req, res) => {
   const { documentId } = req.params;
+  const inline = req.query.inline === 'true';
 
-  console.log('Download request for document ID:', documentId);
+  console.log(`📥 Download request for document ID: ${documentId}`);
 
   db.query(
     'SELECT file_path, file_name FROM documents WHERE id = ?',
     [documentId],
     (err, results) => {
       if (err) {
-        console.error('Database error:', err);
+        console.error('❌ Database error:', err);
         return res.status(500).json({ error: 'Database error: ' + err.message });
       }
 
       if (results.length === 0) {
-        console.error('Document not found in database with ID:', documentId);
+        console.error('⚠️ Document not found in database with ID:', documentId);
         return res.status(404).json({ error: 'Document not found in database' });
       }
 
-      const row = results[0];
-      const cloudinaryUrl = row.file_path; // This is now the Cloudinary URL
+      const { file_path: filePath, file_name: fileName } = results[0];
+      console.log('✅ Found document:', { id: documentId, filePath, fileName });
 
-      console.log('Found document record:', { id: documentId, cloudinary_url: cloudinaryUrl, file_name: row.file_name });
+      // 🔹 Handle Cloudinary URLs
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        console.log('☁️ Cloudinary URL detected');
 
-      // Check if this is a Cloudinary URL (starts with http/https)
-      if (cloudinaryUrl.startsWith('http://') || cloudinaryUrl.startsWith('https://')) {
-        // Cloudinary URL - redirect to it
-        console.log('Redirecting to Cloudinary URL:', cloudinaryUrl);
+        // Force download or inline view using Cloudinary's "fl_attachment"
+        let redirectUrl = filePath;
 
-        // For inline viewing, redirect directly
-        if (req.query.inline === 'true') {
-          return res.redirect(cloudinaryUrl);
-        } else {
-          // For download, modify the URL to force download
-          // Cloudinary supports fl_attachment flag for forcing downloads
-          const downloadUrl = cloudinaryUrl.includes('/upload/')
-            ? cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/')
-            : cloudinaryUrl;
-
-          return res.redirect(downloadUrl);
+        if (!inline) {
+          // Add fl_attachment if not present
+          if (filePath.includes('/upload/')) {
+            const parts = filePath.split('/upload/');
+            redirectUrl = `${parts[0]}/upload/fl_attachment:${encodeURIComponent(fileName)}/${
+              parts[1]
+            }`;
+          }
         }
+
+        console.log(`🔁 Redirecting to: ${redirectUrl}`);
+        return res.redirect(redirectUrl);
+      }
+
+      // 🔹 Handle legacy local files
+      console.log('💾 Serving local file...');
+      const fullLocalPath = path.join(__dirname, 'uploads', filePath);
+
+      if (!fs.existsSync(fullLocalPath)) {
+        console.error('❌ File not found on server:', fullLocalPath);
+        return res.status(404).json({
+          error: 'File not found on server',
+          details: {
+            file_path: filePath,
+            expected_location: fullLocalPath
+          }
+        });
+      }
+
+      // Detect MIME type for inline view
+      const ext = path.extname(fileName).toLowerCase();
+      const contentTypes = {
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif'
+      };
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+
+      if (inline) {
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+        return res.sendFile(fullLocalPath);
       } else {
-        // Legacy local file path - for backward compatibility
-        console.log('Legacy local file detected, serving from uploads directory');
-        const filePath = path.join(__dirname, 'uploads', row.file_path);
-
-        if (!fs.existsSync(filePath)) {
-          return res.status(404).json({
-            error: 'File not found on server',
-            details: {
-              file_path: row.file_path,
-              expected_location: filePath
-            }
-          });
-        }
-
-        const ext = path.extname(row.file_name).toLowerCase();
-        const contentTypes = {
-          '.pdf': 'application/pdf',
-          '.doc': 'application/msword',
-          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          '.xls': 'application/vnd.ms-excel',
-          '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif'
-        };
-
-        const contentType = contentTypes[ext] || 'application/octet-stream';
-
-        if (req.query.inline === 'true') {
-          res.setHeader('Content-Type', contentType);
-          res.setHeader('Content-Disposition', `inline; filename="${row.file_name}"`);
-          res.sendFile(filePath);
-        } else {
-          res.download(filePath, row.file_name);
-        }
+        return res.download(fullLocalPath, fileName);
       }
     }
   );
