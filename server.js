@@ -986,71 +986,114 @@ app.post('/api/bir-forms', (req, res) => {
 });
 
 // Upload documents to Cloudinary
-app.post('/api/upload', upload.array('files'), (req, res) => {
-  const { client_id, form_name, quarter, year } = req.body;
-
-  if (!client_id || !form_name || !quarter || !year) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ error: 'No files uploaded' });
-  }
-
-  // Get form_id first
-  db.query(
-    'SELECT id FROM bir_forms WHERE form_name = ?',
-    [form_name],
-    (err, results) => {
-      if (err || results.length === 0) {
-        return res.status(400).json({ error: 'Invalid form name' });
-      }
-
-      const form_id = results[0].id;
-      const uploadedFiles = [];
-
-      // Insert each file into database with Cloudinary URLs
-      let processed = 0;
-      req.files.forEach((file) => {
-        // Cloudinary URL and public_id are available in file object
-        const cloudinaryUrl = file.path; // Cloudinary secure_url
-        const cloudinaryPublicId = file.filename; // Cloudinary public_id
-
-        db.query(
-          `INSERT INTO documents (user_id, form_id, file_name, file_path, cloudinary_public_id, quarter, year)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [client_id, form_id, file.originalname, cloudinaryUrl, cloudinaryPublicId, quarter, year],
-          (err, result) => {
-            if (err) {
-              console.error('Error inserting document:', err);
-            } else {
-              uploadedFiles.push({
-                id: result.insertId,
-                fileName: file.originalname,
-                fileURL: cloudinaryUrl,
-                quarter,
-                year
-              });
-
-              // Log activity
-              db.query(
-                'INSERT INTO user_activities (user_id, activity_type, description) VALUES (?, ?, ?)',
-                [client_id, 'document_upload', `Uploaded ${file.originalname} for ${form_name}`],
-                (err) => {
-                  if (err) console.error('Error logging activity:', err);
-                }
-              );
-            }
-
-            processed++;
-            if (processed === req.files.length) {
-              res.json({ files: uploadedFiles });
-            }
-          }
-        );
+app.post('/api/upload', (req, res) => {
+  // Wrap the entire endpoint in error handling
+  upload.array('files')(req, res, (err) => {
+    // Handle multer/upload errors
+    if (err) {
+      console.error('Multer/Cloudinary upload error:', err);
+      return res.status(400).json({
+        error: 'Upload failed',
+        details: err.message
       });
     }
-  );
+
+    try {
+      const { client_id, form_name, quarter, year } = req.body;
+
+      console.log('Upload request body:', { client_id, form_name, quarter, year });
+      console.log('Files received:', req.files?.length || 0);
+
+      // Validate required fields
+      if (!client_id) {
+        return res.status(400).json({ error: 'Client ID is required' });
+      }
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+      }
+
+      // Use default values if not provided
+      const finalFormName = form_name || 'Unspecified Form';
+      const finalQuarter = quarter || 'N/A';
+      const finalYear = year || 'N/A';
+
+      console.log('Final values:', { client_id, finalFormName, finalQuarter, finalYear });
+
+      // Get form_id first
+      db.query(
+        'SELECT id FROM bir_forms WHERE form_name = ?',
+        [finalFormName],
+        (err, results) => {
+          if (err) {
+            console.error('Database error fetching form:', err);
+            return res.status(500).json({ error: 'Database error', details: err.message });
+          }
+
+          if (results.length === 0) {
+            return res.status(400).json({ error: `Form not found: ${finalFormName}` });
+          }
+
+          const form_id = results[0].id;
+          const uploadedFiles = [];
+          let processed = 0;
+          let hasError = false;
+
+          // Insert each file into database with Cloudinary URLs
+          req.files.forEach((file) => {
+            if (hasError) return; // Skip if we already sent an error response
+
+            // Cloudinary URL and public_id are available in file object
+            const cloudinaryUrl = file.path; // Cloudinary secure_url
+            const cloudinaryPublicId = file.filename; // Cloudinary public_id
+
+            console.log(`Processing file: ${file.originalname}, Cloudinary URL: ${cloudinaryUrl}`);
+
+            db.query(
+              `INSERT INTO documents (user_id, form_id, file_name, file_path, cloudinary_public_id, quarter, year)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [client_id, form_id, file.originalname, cloudinaryUrl, cloudinaryPublicId, finalQuarter, finalYear],
+              (err, result) => {
+                if (hasError) return; // Response already sent
+
+                if (err) {
+                  console.error('Error inserting document:', err);
+                  hasError = true;
+                  return res.status(500).json({ error: 'Database error', details: err.message });
+                }
+
+                uploadedFiles.push({
+                  id: result.insertId,
+                  fileName: file.originalname,
+                  fileURL: cloudinaryUrl,
+                  quarter: finalQuarter,
+                  year: finalYear
+                });
+
+                // Log activity
+                db.query(
+                  'INSERT INTO user_activities (user_id, activity_type, description) VALUES (?, ?, ?)',
+                  [client_id, 'document_upload', `Uploaded ${file.originalname} for ${finalFormName}`],
+                  (err) => {
+                    if (err) console.error('Error logging activity:', err);
+                  }
+                );
+
+                processed++;
+                if (processed === req.files.length && !hasError) {
+                  console.log(`Successfully uploaded ${uploadedFiles.length} files`);
+                  res.json({ files: uploadedFiles });
+                }
+              }
+            );
+          });
+        }
+      );
+    } catch (error) {
+      console.error('Unexpected error in upload endpoint:', error);
+      return res.status(500).json({ error: 'Server error', details: error.message });
+    }
+  });
 });
 
 // Get documents for a specific client and form
@@ -1431,7 +1474,7 @@ app.get('/api/download/:documentId', (req, res) => {
   console.log('Download request for document ID:', documentId);
 
   db.query(
-    'SELECT file_path, file_name FROM documents WHERE id = ?',
+    'SELECT file_path, file_name, cloudinary_public_id FROM documents WHERE id = ?',
     [documentId],
     (err, results) => {
       if (err) {
@@ -1445,27 +1488,68 @@ app.get('/api/download/:documentId', (req, res) => {
       }
 
       const row = results[0];
-      const cloudinaryUrl = row.file_path; // This is now the Cloudinary URL
+      let cloudinaryUrl = row.file_path; // This is now the Cloudinary URL
+      const fileName = row.file_name;
 
-      console.log('Found document record:', { id: documentId, cloudinary_url: cloudinaryUrl, file_name: row.file_name });
+      console.log('Found document record:', { id: documentId, cloudinary_url: cloudinaryUrl, file_name: fileName });
 
       // Check if this is a Cloudinary URL (starts with http/https)
       if (cloudinaryUrl.startsWith('http://') || cloudinaryUrl.startsWith('https://')) {
-        // Cloudinary URL - redirect to it
-        console.log('Redirecting to Cloudinary URL:', cloudinaryUrl);
+        // Use the URL as stored in database - don't modify it
+        // Old files were uploaded without extensions, new files will have them
+        console.log('Using Cloudinary URL as stored:', cloudinaryUrl);
 
-        // For inline viewing, redirect directly
-        if (req.query.inline === 'true') {
-          return res.redirect(cloudinaryUrl);
-        } else {
-          // For download, modify the URL to force download
-          // Cloudinary supports fl_attachment flag for forcing downloads
-          const downloadUrl = cloudinaryUrl.includes('/upload/')
-            ? cloudinaryUrl.replace('/upload/', '/upload/fl_attachment/')
-            : cloudinaryUrl;
+        // Fetch file from Cloudinary and stream with proper headers
+        const https = require('https');
+        const http = require('http');
 
-          return res.redirect(downloadUrl);
-        }
+        const protocol = cloudinaryUrl.startsWith('https') ? https : http;
+        const isInline = req.query.inline === 'true';
+
+        console.log('Fetching file from Cloudinary:', cloudinaryUrl, 'Inline:', isInline);
+
+        protocol.get(cloudinaryUrl, (cloudinaryRes) => {
+          if (cloudinaryRes.statusCode !== 200) {
+            console.error('Cloudinary returned status:', cloudinaryRes.statusCode);
+            return res.status(cloudinaryRes.statusCode).json({
+              error: 'Failed to fetch file from cloud storage'
+            });
+          }
+
+          // Determine content type based on file extension
+          const ext = path.extname(fileName).toLowerCase();
+          const contentTypes = {
+            '.pdf': 'application/pdf',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.txt': 'text/plain',
+            '.csv': 'text/csv'
+          };
+          const contentType = contentTypes[ext] || cloudinaryRes.headers['content-type'] || 'application/octet-stream';
+
+          // Set headers based on view or download mode
+          if (isInline) {
+            res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+          } else {
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+          }
+          res.setHeader('Content-Type', contentType);
+          if (cloudinaryRes.headers['content-length']) {
+            res.setHeader('Content-Length', cloudinaryRes.headers['content-length']);
+          }
+
+          // Pipe the file to the response
+          cloudinaryRes.pipe(res);
+        }).on('error', (err) => {
+          console.error('Error fetching from Cloudinary:', err);
+          return res.status(500).json({ error: 'Failed to fetch file: ' + err.message });
+        });
       } else {
         // Legacy local file path - for backward compatibility
         console.log('Legacy local file detected, serving from uploads directory');

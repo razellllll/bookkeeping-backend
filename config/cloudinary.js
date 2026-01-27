@@ -14,29 +14,53 @@ const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: async (req, file) => {
     // Create a folder structure: viron-bookkeeping/client-{id}/form-{name}/year-{year}/quarter-{quarter}
-    const { client_id, form_name, quarter, year } = req.body;
+    // Note: req.body fields may not be parsed yet when this runs
+    const client_id = req.body?.client_id || 'unknown';
+    const form_name = req.body?.form_name;
+    const quarter = req.body?.quarter;
+    const year = req.body?.year;
 
-    // Sanitize folder path
-    const sanitizedFormName = form_name ? form_name.replace(/[^a-zA-Z0-9-_]/g, '_') : 'general';
-    const folderPath = `viron-bookkeeping/client-${client_id}/${sanitizedFormName}/${year}/Q${quarter}`;
+    // Sanitize folder path and handle optional values
+    const sanitizedFormName = form_name && form_name !== 'N/A' && form_name !== 'Unspecified Form'
+      ? form_name.replace(/[^a-zA-Z0-9-_]/g, '_')
+      : 'general';
+
+    // Build folder path dynamically, excluding N/A values
+    let folderPath = `viron-bookkeeping/client-${client_id}/${sanitizedFormName}`;
+
+    // Only add year if it's valid
+    if (year && year !== 'N/A' && !isNaN(year)) {
+      folderPath += `/${year}`;
+
+      // Only add quarter if year is present and quarter is valid
+      if (quarter && quarter !== 'N/A' && quarter !== '') {
+        folderPath += `/${quarter}`;
+      }
+    }
 
     // Determine resource type based on file mimetype
     let resourceType = 'auto';
+    let formatOptions = {};
+
     if (file.mimetype.startsWith('image/')) {
       resourceType = 'image';
+      formatOptions.allowed_formats = ['jpg', 'jpeg', 'png', 'gif'];
     } else if (file.mimetype.startsWith('video/')) {
       resourceType = 'video';
     } else {
       resourceType = 'raw'; // For PDFs, documents, etc.
+      // Note: Don't use allowed_formats for raw resources - it causes issues
     }
 
     return {
       folder: folderPath,
       resource_type: resourceType,
-      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt'],
-      public_id: `${Date.now()}-${file.originalname.replace(/\.[^/.]+$/, '')}`, // Remove extension, Cloudinary adds it
-      use_filename: true,
-      unique_filename: true,
+      ...formatOptions, // Only add allowed_formats for images
+      // Keep the full filename including extension for raw files (PDFs, docs, etc.)
+      // Cloudinary only auto-adds extensions for images, not raw resources
+      public_id: `${Date.now()}-${file.originalname}`,
+      use_filename: false, // We're manually creating the public_id
+      unique_filename: false, // Timestamp already makes it unique
       overwrite: false,
     };
   },
